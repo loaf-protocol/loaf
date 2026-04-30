@@ -165,4 +165,100 @@ contract LoafEscrowTest is Test {
         vm.expectRevert(LoafEscrow.ZeroHash.selector);
         escrow.updateAxlKey("");
     }
+
+    // ── postJob ───────────────────────────────────────────────────────────────
+
+    function test_postJob_success() public {
+        uint256 jobId = _postDefaultJob();
+        assertEq(jobId, 1);
+        assertEq(escrow.jobCount(), 1);
+    }
+
+    function test_postJob_addsToOpenArray() public {
+        _postDefaultJob();
+        assertEq(escrow.getJobCountByState(LoafEscrow.JobState.OPEN), 1);
+        assertEq(escrow.getJobIdsByState(LoafEscrow.JobState.OPEN)[0], 1);
+    }
+
+    function test_postJob_locksUSDC() public {
+        uint256 before = usdc.balanceOf(poster);
+        _postDefaultJob();
+        uint256 locked = WORKER_AMOUNT + (VERIFIER_FEE * VERIFIER_COUNT);
+        assertEq(usdc.balanceOf(poster), before - locked);
+        assertEq(usdc.balanceOf(address(escrow)), locked);
+    }
+
+    function test_postJob_incrementingIds() public {
+        _postDefaultJob();
+        vm.prank(poster);
+        uint256 jobId2 = escrow.postJob("job2", WORKER_AMOUNT, VERIFIER_FEE, 1, 1, 0, block.timestamp + 1 days);
+        assertEq(jobId2, 2);
+    }
+
+    function test_postJob_revert_notRegistered() public {
+        vm.prank(stranger);
+        vm.expectRevert(LoafEscrow.NotRegistered.selector);
+        escrow.postJob("x", 1e6, 1e6, 1, 1, 0, block.timestamp + 1 days);
+    }
+
+    function test_postJob_revert_zeroAmount() public {
+        _register(poster, "axl-poster");
+        vm.prank(poster);
+        vm.expectRevert(LoafEscrow.ZeroAmount.selector);
+        escrow.postJob("x", 0, 1e6, 1, 1, 0, block.timestamp + 1 days);
+    }
+
+    function test_postJob_revert_zeroVerifierCount() public {
+        _register(poster, "axl-poster");
+        vm.prank(poster);
+        vm.expectRevert(LoafEscrow.InvalidVerifierCount.selector);
+        escrow.postJob("x", 1e6, 1e6, 0, 0, 0, block.timestamp + 1 days);
+    }
+
+    function test_postJob_revert_tooManyVerifiers() public {
+        _register(poster, "axl-poster");
+        usdc.mint(poster, 10000e6);
+        vm.startPrank(poster);
+        usdc.approve(address(escrow), type(uint256).max);
+        vm.expectRevert(LoafEscrow.InvalidVerifierCount.selector);
+        escrow.postJob("x", 1e6, 1e6, 11, 1, 0, block.timestamp + 1 days);
+        vm.stopPrank();
+    }
+
+    function test_postJob_revert_invalidQuorum() public {
+        _register(poster, "axl-poster");
+        vm.startPrank(poster);
+        usdc.approve(address(escrow), type(uint256).max);
+        vm.expectRevert(LoafEscrow.InvalidQuorum.selector);
+        escrow.postJob("x", 1e6, 1e6, 3, 4, 0, block.timestamp + 1 days);
+        vm.stopPrank();
+    }
+
+    function test_postJob_revert_expiredDeadline() public {
+        _register(poster, "axl-poster");
+        vm.startPrank(poster);
+        usdc.approve(address(escrow), type(uint256).max);
+        vm.expectRevert(LoafEscrow.JobExpired.selector);
+        escrow.postJob("x", 1e6, 1e6, 1, 1, 0, block.timestamp);
+        vm.stopPrank();
+    }
+
+    function test_postJob_edgeCase_oneVerifier() public {
+        _register(poster, "axl-poster");
+        vm.startPrank(poster);
+        usdc.approve(address(escrow), type(uint256).max);
+        uint256 jobId = escrow.postJob("x", 1e6, 1e6, 1, 1, 0, block.timestamp + 1 days);
+        vm.stopPrank();
+        assertEq(jobId, 1);
+    }
+
+    function test_postJob_edgeCase_tenVerifiers() public {
+        _register(poster, "axl-poster");
+        usdc.mint(poster, 10000e6);
+        vm.startPrank(poster);
+        usdc.approve(address(escrow), type(uint256).max);
+        uint256 jobId = escrow.postJob("x", 1e6, 1e6, 10, 10, 0, block.timestamp + 1 days);
+        vm.stopPrank();
+        assertEq(jobId, 1);
+    }
 }
