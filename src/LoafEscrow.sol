@@ -307,6 +307,42 @@ contract LoafEscrow {
         emit JobFailed(jobId, posterId, refund);
     }
 
+    // ── View functions ────────────────────────────────────────────────────────
+
+    function getJob(uint256 jobId) external view returns (Job memory) {
+        return jobs[jobId];
+    }
+
+    function getVerifierIds(uint256 jobId) external view returns (uint256[] memory) {
+        return jobs[jobId].verifierIds;
+    }
+
+    function getPendingVerifiers(uint256 jobId) external view returns (uint256[] memory) {
+        return pendingVerifiers[jobId];
+    }
+
+    function getJobIdsByState(JobState state) external view returns (uint256[] memory) {
+        return jobsByState[state];
+    }
+
+    function getJobCountByState(JobState state) external view returns (uint256) {
+        return jobsByState[state].length;
+    }
+
+    function getProfile(uint256 profileId) external view returns (ActorProfile memory) {
+        if (!profiles[profileId].exists) revert ProfileNotFound();
+        return profiles[profileId];
+    }
+
+    function getProfileId(address addr) external view returns (uint256) {
+        return _profileIdOf(addr);
+    }
+
+    function getProfileByAddress(address addr) external view returns (ActorProfile memory) {
+        uint256 profileId = _profileIdOf(addr);
+        return profiles[profileId];
+    }
+
     function updateAxlKey(string calldata newKey) external {
         uint256 profileId = _profileIdOf(msg.sender);
         if (bytes(newKey).length == 0) revert ZeroHash();
