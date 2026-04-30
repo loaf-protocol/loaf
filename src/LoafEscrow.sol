@@ -220,6 +220,51 @@ contract LoafEscrow {
         emit WorkSubmitted(jobId, outputHash);
     }
 
+    function applyToVerify(uint256 jobId) external {
+        uint256 verifierId = _profileIdOf(msg.sender);
+        Job storage j = jobs[jobId];
+        if (j.state != JobState.IN_REVIEW) revert InvalidState(j.state);
+        if (block.timestamp >= j.expiresAt) revert JobExpired();
+        if (profiles[verifierId].verifierScore < j.minVerifierScore) revert BelowMinReputation();
+        if (isPendingVerifier[jobId][verifierId]) revert AlreadyApplied();
+        if (isAssignedVerifier[jobId][verifierId]) revert AlreadyApplied();
+        if (j.verifierIds.length >= j.verifierCount) revert VerifierSlotsFull();
+
+        pendingVerifiers[jobId].push(verifierId);
+        isPendingVerifier[jobId][verifierId] = true;
+
+        emit VerifierApplied(jobId, verifierId);
+    }
+
+    function acceptVerifier(uint256 jobId, uint256 verifierProfileId) external {
+        uint256 posterId = _profileIdOf(msg.sender);
+        Job storage j = jobs[jobId];
+        if (j.posterId != posterId) revert NotPoster();
+        if (j.state != JobState.IN_REVIEW) revert InvalidState(j.state);
+        if (!isPendingVerifier[jobId][verifierProfileId]) revert ProfileNotFound();
+        if (j.verifierIds.length >= j.verifierCount) revert VerifierSlotsFull();
+
+        ActorProfile storage v = profiles[verifierProfileId];
+        if (v.verifierScore < j.minVerifierScore) revert BelowMinReputation();
+
+        // Remove from pending list
+        uint256[] storage pending = pendingVerifiers[jobId];
+        for (uint256 i = 0; i < pending.length; i++) {
+            if (pending[i] == verifierProfileId) {
+                pending[i] = pending[pending.length - 1];
+                pending.pop();
+                break;
+            }
+        }
+        isPendingVerifier[jobId][verifierProfileId] = false;
+
+        j.verifierIds.push(verifierProfileId);
+        isAssignedVerifier[jobId][verifierProfileId] = true;
+        v.verifierJobs++;
+
+        emit VerifierAccepted(jobId, verifierProfileId);
+    }
+
     function updateAxlKey(string calldata newKey) external {
         uint256 profileId = _profileIdOf(msg.sender);
         if (bytes(newKey).length == 0) revert ZeroHash();
