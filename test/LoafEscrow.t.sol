@@ -363,4 +363,139 @@ contract LoafEscrowTest is Test {
         vm.expectRevert(LoafEscrow.ZeroHash.selector);
         escrow.submitWork(jobId, bytes32(0));
     }
+
+    // ── applyToVerify ─────────────────────────────────────────────────────────
+
+    function test_applyToVerify_success() public {
+        uint256 jobId = _inReviewJob();
+        uint256 v1Id  = escrow.getProfileId(verifier1);
+        vm.prank(verifier1);
+        escrow.applyToVerify(jobId);
+        uint256[] memory pending = escrow.getPendingVerifiers(jobId);
+        assertEq(pending.length, 1);
+        assertEq(pending[0], v1Id);
+    }
+
+    function test_applyToVerify_revert_notRegistered() public {
+        uint256 jobId = _inReviewJob();
+        vm.prank(stranger);
+        vm.expectRevert(LoafEscrow.NotRegistered.selector);
+        escrow.applyToVerify(jobId);
+    }
+
+    function test_applyToVerify_revert_wrongState() public {
+        uint256 jobId = _activeJob();
+        vm.prank(verifier1);
+        vm.expectRevert(abi.encodeWithSelector(LoafEscrow.InvalidState.selector, LoafEscrow.JobState.ACTIVE));
+        escrow.applyToVerify(jobId);
+    }
+
+    function test_applyToVerify_revert_expired() public {
+        uint256 jobId = _inReviewJob();
+        vm.warp(block.timestamp + JOB_EXPIRY_OFFSET + 1);
+        vm.prank(verifier1);
+        vm.expectRevert(LoafEscrow.JobExpired.selector);
+        escrow.applyToVerify(jobId);
+    }
+
+    function test_applyToVerify_revert_belowMinReputation() public {
+        uint256 jobId = _inReviewJob();
+        // Post a job requiring high reputation
+        _register(stranger, "axl-stranger");
+        vm.startPrank(poster);
+        uint256 highRepJobId = escrow.postJob("hard job", WORKER_AMOUNT, VERIFIER_FEE, 1, 1, 400, block.timestamp + 1 days);
+        vm.stopPrank();
+        uint256 strangerId = escrow.getProfileId(stranger);
+        // Accept bid and submit work to get to IN_REVIEW
+        vm.prank(poster); escrow.acceptBid(highRepJobId, strangerId);
+        vm.prank(stranger); escrow.submitWork(highRepJobId, keccak256("out"));
+        // verifier1 has score 250 < 400
+        vm.prank(verifier1);
+        vm.expectRevert(LoafEscrow.BelowMinReputation.selector);
+        escrow.applyToVerify(highRepJobId);
+        // suppress unused variable warning
+        (jobId);
+    }
+
+    function test_applyToVerify_revert_alreadyApplied() public {
+        uint256 jobId = _inReviewJob();
+        vm.prank(verifier1);
+        escrow.applyToVerify(jobId);
+        vm.prank(verifier1);
+        vm.expectRevert(LoafEscrow.AlreadyApplied.selector);
+        escrow.applyToVerify(jobId);
+    }
+
+    function test_applyToVerify_revert_slotsFull() public {
+        uint256 jobId = _inReviewJob();
+        // job has 3 slots; fill all then try a 4th
+        address v4 = makeAddr("verifier4");
+        usdc.mint(v4, 100e6);
+        _register(v4, "axl-v4");
+        _acceptAllVerifiers(jobId);
+        vm.prank(v4);
+        vm.expectRevert(LoafEscrow.VerifierSlotsFull.selector);
+        escrow.applyToVerify(jobId);
+    }
+
+    // ── acceptVerifier ────────────────────────────────────────────────────────
+
+    function test_acceptVerifier_success() public {
+        uint256 jobId = _inReviewJob();
+        uint256 v1Id  = escrow.getProfileId(verifier1);
+        vm.prank(verifier1); escrow.applyToVerify(jobId);
+        vm.prank(poster);    escrow.acceptVerifier(jobId, v1Id);
+        uint256[] memory assigned = escrow.getVerifierIds(jobId);
+        assertEq(assigned.length, 1);
+        assertEq(assigned[0], v1Id);
+        assertEq(escrow.getPendingVerifiers(jobId).length, 0);
+    }
+
+    function test_acceptVerifier_revert_notPoster() public {
+        uint256 jobId = _inReviewJob();
+        uint256 v1Id  = escrow.getProfileId(verifier1);
+        vm.prank(verifier1); escrow.applyToVerify(jobId);
+        vm.prank(worker);
+        vm.expectRevert(LoafEscrow.NotPoster.selector);
+        escrow.acceptVerifier(jobId, v1Id);
+    }
+
+    function test_acceptVerifier_revert_notPending() public {
+        uint256 jobId = _inReviewJob();
+        uint256 v1Id  = escrow.getProfileId(verifier1);
+        vm.prank(poster);
+        vm.expectRevert(LoafEscrow.ProfileNotFound.selector);
+        escrow.acceptVerifier(jobId, v1Id);
+    }
+
+    function test_acceptVerifier_revert_wrongState() public {
+        uint256 jobId = _postDefaultJob();
+        uint256 v1Id  = escrow.getProfileId(verifier1);
+        vm.prank(poster);
+        vm.expectRevert(abi.encodeWithSelector(LoafEscrow.InvalidState.selector, LoafEscrow.JobState.OPEN));
+        escrow.acceptVerifier(jobId, v1Id);
+    }
+
+    function test_acceptVerifier_revert_slotsFull() public {
+        uint256 jobId = _inReviewJob();
+        uint256 v1Id  = escrow.getProfileId(verifier1);
+        uint256 v2Id  = escrow.getProfileId(verifier2);
+        uint256 v3Id  = escrow.getProfileId(verifier3);
+        address v4    = makeAddr("verifier4");
+        _register(v4, "axl-v4");
+        uint256 v4Id  = escrow.getProfileId(v4);
+
+        vm.prank(verifier1); escrow.applyToVerify(jobId);
+        vm.prank(verifier2); escrow.applyToVerify(jobId);
+        vm.prank(verifier3); escrow.applyToVerify(jobId);
+        vm.prank(v4);        escrow.applyToVerify(jobId);
+
+        vm.startPrank(poster);
+        escrow.acceptVerifier(jobId, v1Id);
+        escrow.acceptVerifier(jobId, v2Id);
+        escrow.acceptVerifier(jobId, v3Id);
+        vm.expectRevert(LoafEscrow.VerifierSlotsFull.selector);
+        escrow.acceptVerifier(jobId, v4Id);
+        vm.stopPrank();
+    }
 }
