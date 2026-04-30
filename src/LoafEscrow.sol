@@ -83,6 +83,23 @@ contract LoafEscrow {
     // Vote tracking
     mapping(uint256 => mapping(uint256 => bool)) private hasVoted;
 
+    // ── Events ────────────────────────────────────────────────────────────────
+
+    event ProfileRegistered(uint256 indexed profileId, address indexed addr);
+    event AxlKeyUpdated(uint256 indexed profileId, string newKey);
+    event ReputationUpdated(uint256 indexed profileId, string role, uint16 newScore);
+
+    event JobPosted(uint256 indexed jobId, uint256 indexed posterId, uint256 workerAmount, uint256 verifierFeeEach, uint8 verifierCount);
+    event BidAccepted(uint256 indexed jobId, uint256 indexed workerId);
+    event WorkSubmitted(uint256 indexed jobId, bytes32 outputHash);
+    event VerifierApplied(uint256 indexed jobId, uint256 indexed verifierProfileId);
+    event VerifierAccepted(uint256 indexed jobId, uint256 indexed verifierProfileId);
+    event VerdictSubmitted(uint256 indexed jobId, uint256 indexed verifierProfileId, bool pass);
+
+    event JobCompleted(uint256 indexed jobId, uint256 indexed workerId, uint256 amount);
+    event JobFailed(uint256 indexed jobId, uint256 indexed posterId, uint256 refund);
+    event VerifierFeePaid(uint256 indexed jobId, uint256 indexed verifierProfileId, address verifierAddr, uint256 fee);
+
     // ── Constructor ───────────────────────────────────────────────────────────
 
     constructor(address _usdc) {
