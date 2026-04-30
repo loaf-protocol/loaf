@@ -6,4 +6,4 @@ cache/
 lib/
 lcov.info
 coverage/
-broadcast/*/run-latest.json
+broadcast/**/run-latest.json
