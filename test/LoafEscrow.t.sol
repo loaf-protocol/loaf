@@ -670,4 +670,103 @@ contract LoafEscrowTest is Test {
         vm.expectRevert(abi.encodeWithSelector(LoafEscrow.InvalidState.selector, LoafEscrow.JobState.ACTIVE));
         escrow.submitVerdict(jobId, true);
     }
+
+    // ── claimExpired ──────────────────────────────────────────────────────────
+
+    function test_claimExpired_success() public {
+        uint256 jobId    = _postDefaultJob();
+        uint256 posterId = escrow.getProfileId(poster);
+
+        uint256 locked  = WORKER_AMOUNT + (VERIFIER_FEE * VERIFIER_COUNT);
+        uint256 posterBefore      = usdc.balanceOf(poster);
+        uint16  posterScoreBefore = escrow.getProfile(posterId).posterScore;
+
+        vm.warp(block.timestamp + JOB_EXPIRY_OFFSET + 1);
+        vm.prank(poster);
+        escrow.claimExpired(jobId);
+
+        assertEq(usdc.balanceOf(poster), posterBefore + locked);
+        assertEq(uint8(escrow.getJob(jobId).state), uint8(LoafEscrow.JobState.FAILED));
+        assertEq(escrow.getProfile(posterId).posterScore, uint16(int16(posterScoreBefore) - 15));
+    }
+
+    function test_claimExpired_stateArrayMoves() public {
+        uint256 jobId = _postDefaultJob();
+        vm.warp(block.timestamp + JOB_EXPIRY_OFFSET + 1);
+        vm.prank(poster);
+        escrow.claimExpired(jobId);
+        assertEq(escrow.getJobCountByState(LoafEscrow.JobState.OPEN), 0);
+        assertEq(escrow.getJobCountByState(LoafEscrow.JobState.FAILED), 1);
+    }
+
+    function test_claimExpired_revert_notPoster() public {
+        uint256 jobId = _postDefaultJob();
+        vm.warp(block.timestamp + JOB_EXPIRY_OFFSET + 1);
+        vm.prank(worker);
+        vm.expectRevert(LoafEscrow.NotPoster.selector);
+        escrow.claimExpired(jobId);
+    }
+
+    function test_claimExpired_revert_notExpiredYet() public {
+        uint256 jobId = _postDefaultJob();
+        vm.prank(poster);
+        vm.expectRevert(abi.encodeWithSelector(LoafEscrow.InvalidState.selector, LoafEscrow.JobState.OPEN));
+        escrow.claimExpired(jobId);
+    }
+
+    function test_claimExpired_revert_wrongState() public {
+        uint256 jobId = _activeJob();
+        vm.warp(block.timestamp + JOB_EXPIRY_OFFSET + 1);
+        vm.prank(poster);
+        vm.expectRevert(abi.encodeWithSelector(LoafEscrow.InvalidState.selector, LoafEscrow.JobState.ACTIVE));
+        escrow.claimExpired(jobId);
+    }
+
+    // ── View functions ────────────────────────────────────────────────────────
+
+    function test_getJob_returnsAllFields() public {
+        uint256 jobId = _postDefaultJob();
+        LoafEscrow.Job memory j = escrow.getJob(jobId);
+        assertEq(j.workerAmount,    WORKER_AMOUNT);
+        assertEq(j.verifierFeeEach, VERIFIER_FEE);
+        assertEq(j.verifierCount,   VERIFIER_COUNT);
+        assertEq(j.quorumThreshold, QUORUM_THRESHOLD);
+        assertEq(uint8(j.state),    uint8(LoafEscrow.JobState.OPEN));
+    }
+
+    function test_getVerifierIds_vs_getPendingVerifiers() public {
+        uint256 jobId = _inReviewJob();
+        uint256 v1Id  = escrow.getProfileId(verifier1);
+        vm.prank(verifier1); escrow.applyToVerify(jobId);
+
+        assertEq(escrow.getPendingVerifiers(jobId).length, 1);
+        assertEq(escrow.getVerifierIds(jobId).length, 0);
+
+        vm.prank(poster); escrow.acceptVerifier(jobId, v1Id);
+
+        assertEq(escrow.getPendingVerifiers(jobId).length, 0);
+        assertEq(escrow.getVerifierIds(jobId).length, 1);
+    }
+
+    function test_getProfile_revert_notFound() public {
+        vm.expectRevert(LoafEscrow.ProfileNotFound.selector);
+        escrow.getProfile(999);
+    }
+
+    function test_getProfileId_and_getProfileByAddress() public {
+        uint256 id = _register(poster, "axl-poster");
+        assertEq(escrow.getProfileId(poster), id);
+        LoafEscrow.ActorProfile memory p = escrow.getProfileByAddress(poster);
+        assertEq(p.id,   id);
+        assertEq(p.addr, poster);
+    }
+
+    function test_getJobIdsByState_multipleJobs() public {
+        _postDefaultJob();
+        vm.prank(poster);
+        uint256 jobId2 = escrow.postJob("job2", WORKER_AMOUNT, VERIFIER_FEE, 1, 1, 0, block.timestamp + 1 days);
+        uint256[] memory open = escrow.getJobIdsByState(LoafEscrow.JobState.OPEN);
+        assertEq(open.length, 2);
+        assertEq(jobId2, 2);
+    }
 }
