@@ -38,4 +38,54 @@ contract LoafEscrow {
         uint256 expiresAt;
         JobState state;
     }
+
+    // ── Constants ────────────────────────────────────────────────────────────
+
+    IERC20 public immutable usdc;
+
+    uint16 public constant INITIAL_SCORE = 250;
+    uint16 public constant MAX_SCORE = 500;
+
+    // Worker rep deltas
+    int16 private constant WORKER_PASS_DELTA = 20;
+    int16 private constant WORKER_FAIL_DELTA = -30;
+
+    // Verifier rep deltas
+    int16 private constant VERIFIER_MAJORITY_DELTA = 10;
+    int16 private constant VERIFIER_MINORITY_DELTA = -20;
+
+    // Poster rep deltas
+    int16 private constant POSTER_RESOLVE_DELTA = 10;
+    int16 private constant POSTER_EXPIRE_DELTA = -15;
+
+    // ── Profile storage ───────────────────────────────────────────────────────
+
+    uint256 public actorCount;
+    mapping(uint256 => ActorProfile) private profiles;
+    mapping(address => uint256) private addressToProfileId;
+
+    // ── Job storage ───────────────────────────────────────────────────────────
+
+    uint256 public jobCount;
+    mapping(uint256 => Job) private jobs;
+
+    // Per-state job arrays for O(1) listing
+    mapping(JobState => uint256[]) private jobsByState;
+    mapping(uint256 => uint256) private jobStateIndex;
+
+    // Pending verifier applications per job
+    mapping(uint256 => uint256[]) private pendingVerifiers;
+    mapping(uint256 => mapping(uint256 => bool)) private isPendingVerifier;
+
+    // Verifier assignment tracking
+    mapping(uint256 => mapping(uint256 => bool)) private isAssignedVerifier;
+
+    // Vote tracking
+    mapping(uint256 => mapping(uint256 => bool)) private hasVoted;
+
+    // ── Constructor ───────────────────────────────────────────────────────────
+
+    constructor(address _usdc) {
+        usdc = IERC20(_usdc);
+    }
 }
