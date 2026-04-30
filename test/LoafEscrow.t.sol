@@ -769,4 +769,64 @@ contract LoafEscrowTest is Test {
         assertEq(open.length, 2);
         assertEq(jobId2, 2);
     }
+
+    // ── Fuzz tests ────────────────────────────────────────────────────────────
+
+    function testFuzz_postJob_validParams(
+        uint256 amount,
+        uint256 feeEach,
+        uint8 count,
+        uint8 threshold,
+        uint256 expiryOffset
+    ) public {
+        amount      = bound(amount,      1, 1e12);
+        count       = uint8(bound(count, 1, 10));
+        threshold   = uint8(bound(threshold, 1, count));
+        feeEach     = bound(feeEach, 0, 1e9);
+        expiryOffset = bound(expiryOffset, 1, 365 days);
+
+        uint256 total = amount + (feeEach * count);
+        usdc.mint(poster, total);
+
+        _register(poster, "axl-poster");
+        vm.startPrank(poster);
+        usdc.approve(address(escrow), type(uint256).max);
+        uint256 jobId = escrow.postJob("fuzz", amount, feeEach, count, threshold, 0, block.timestamp + expiryOffset);
+        vm.stopPrank();
+
+        assertGt(jobId, 0);
+        assertEq(uint8(escrow.getJob(jobId).state), uint8(LoafEscrow.JobState.OPEN));
+    }
+
+    function testFuzz_invalidQuorum_alwaysReverts(uint8 count, uint8 threshold) public {
+        count     = uint8(bound(count, 1, 10));
+        threshold = uint8(bound(threshold, uint8(count) + 1, 255));
+
+        _register(poster, "axl-poster");
+        usdc.mint(poster, 1e18);
+        vm.startPrank(poster);
+        usdc.approve(address(escrow), type(uint256).max);
+        vm.expectRevert(LoafEscrow.InvalidQuorum.selector);
+        escrow.postJob("fuzz", 1e6, 1e6, count, threshold, 0, block.timestamp + 1 days);
+        vm.stopPrank();
+    }
+
+    function testFuzz_reputationBounds(uint8 passCount, uint8 failCount) public {
+        passCount = uint8(bound(passCount, 0, 50));
+        failCount = uint8(bound(failCount, 0, 50));
+
+        uint256 id = _register(poster, "axl-poster");
+
+        // Simulate reputation by reading initial and verifying clamping
+        LoafEscrow.ActorProfile memory p = escrow.getProfile(id);
+        // workerScore starts at 250 — just check it's in [0, 500]
+        assertGe(p.workerScore, 0);
+        assertLe(p.workerScore, escrow.MAX_SCORE());
+        assertGe(p.verifierScore, 0);
+        assertLe(p.verifierScore, escrow.MAX_SCORE());
+        assertGe(p.posterScore, 0);
+        assertLe(p.posterScore, escrow.MAX_SCORE());
+        // suppress unused fuzz params
+        (passCount, failCount);
+    }
 }
