@@ -124,4 +124,42 @@ contract LoafEscrow {
     constructor(address _usdc) {
         usdc = IERC20(_usdc);
     }
+
+    // ── Profile functions ─────────────────────────────────────────────────────
+
+    function registerProfile(string calldata axlPublicKey) external returns (uint256 profileId) {
+        if (addressToProfileId[msg.sender] != 0) revert AlreadyRegistered();
+        if (bytes(axlPublicKey).length == 0) revert ZeroHash();
+
+        profileId = ++actorCount;
+        profiles[profileId] = ActorProfile({
+            id: profileId,
+            addr: msg.sender,
+            axlPublicKey: axlPublicKey,
+            workerScore: INITIAL_SCORE,
+            verifierScore: INITIAL_SCORE,
+            posterScore: INITIAL_SCORE,
+            workerJobs: 0,
+            verifierJobs: 0,
+            posterJobs: 0,
+            exists: true
+        });
+        addressToProfileId[msg.sender] = profileId;
+
+        emit ProfileRegistered(profileId, msg.sender);
+    }
+
+    function updateAxlKey(string calldata newKey) external {
+        uint256 profileId = _profileIdOf(msg.sender);
+        if (bytes(newKey).length == 0) revert ZeroHash();
+        profiles[profileId].axlPublicKey = newKey;
+        emit AxlKeyUpdated(profileId, newKey);
+    }
+
+    // ── Internal helpers ──────────────────────────────────────────────────────
+
+    function _profileIdOf(address addr) internal view returns (uint256 profileId) {
+        profileId = addressToProfileId[addr];
+        if (profileId == 0) revert NotRegistered();
+    }
 }
