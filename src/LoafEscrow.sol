@@ -149,6 +149,46 @@ contract LoafEscrow {
         emit ProfileRegistered(profileId, msg.sender);
     }
 
+    // ── Job functions ─────────────────────────────────────────────────────────
+
+    function postJob(
+        string calldata criteria,
+        uint256 workerAmount,
+        uint256 verifierFeeEach,
+        uint8 verifierCount,
+        uint8 quorumThreshold,
+        uint16 minVerifierScore,
+        uint256 expiresAt
+    ) external returns (uint256 jobId) {
+        uint256 posterId = _profileIdOf(msg.sender);
+        if (workerAmount == 0) revert ZeroAmount();
+        if (verifierCount < 1 || verifierCount > 10) revert InvalidVerifierCount();
+        if (quorumThreshold < 1 || quorumThreshold > verifierCount) revert InvalidQuorum();
+        if (expiresAt <= block.timestamp) revert JobExpired();
+
+        uint256 totalLock = workerAmount + (verifierFeeEach * verifierCount);
+        usdc.safeTransferFrom(msg.sender, address(this), totalLock);
+
+        jobId = ++jobCount;
+        Job storage j = jobs[jobId];
+        j.posterId = posterId;
+        j.criteria = criteria;
+        j.workerAmount = workerAmount;
+        j.verifierFeeEach = verifierFeeEach;
+        j.verifierCount = verifierCount;
+        j.quorumThreshold = quorumThreshold;
+        j.minVerifierScore = minVerifierScore;
+        j.expiresAt = expiresAt;
+        j.state = JobState.OPEN;
+
+        jobStateIndex[jobId] = jobsByState[JobState.OPEN].length;
+        jobsByState[JobState.OPEN].push(jobId);
+
+        profiles[posterId].posterJobs++;
+
+        emit JobPosted(jobId, posterId, workerAmount, verifierFeeEach, verifierCount);
+    }
+
     function updateAxlKey(string calldata newKey) external {
         uint256 profileId = _profileIdOf(msg.sender);
         if (bytes(newKey).length == 0) revert ZeroHash();
