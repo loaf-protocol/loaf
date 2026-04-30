@@ -82,6 +82,8 @@ contract LoafEscrow {
 
     // Vote tracking
     mapping(uint256 => mapping(uint256 => bool)) private hasVoted;
+    // true = verifier voted fail, false = verifier voted pass
+    mapping(uint256 => mapping(uint256 => bool)) private _verifierVotedFail;
 
     // ── Errors ────────────────────────────────────────────────────────────────
 
@@ -265,6 +267,31 @@ contract LoafEscrow {
         emit VerifierAccepted(jobId, verifierProfileId);
     }
 
+    function submitVerdict(uint256 jobId, bool pass) external {
+        uint256 verifierId = _profileIdOf(msg.sender);
+        Job storage j = jobs[jobId];
+        if (j.state != JobState.IN_REVIEW) revert InvalidState(j.state);
+        if (!isAssignedVerifier[jobId][verifierId]) revert NotAssignedVerifier();
+        if (hasVoted[jobId][verifierId]) revert AlreadyVoted();
+
+        hasVoted[jobId][verifierId] = true;
+        if (!pass) _verifierVotedFail[jobId][verifierId] = true;
+
+        if (pass) {
+            j.passVotes++;
+        } else {
+            j.failVotes++;
+        }
+
+        emit VerdictSubmitted(jobId, verifierId, pass);
+
+        if (j.passVotes >= j.quorumThreshold) {
+            _resolve(jobId, true);
+        } else if (j.failVotes > j.verifierCount - j.quorumThreshold) {
+            _resolve(jobId, false);
+        }
+    }
+
     function updateAxlKey(string calldata newKey) external {
         uint256 profileId = _profileIdOf(msg.sender);
         if (bytes(newKey).length == 0) revert ZeroHash();
@@ -277,6 +304,37 @@ contract LoafEscrow {
     function _profileIdOf(address addr) internal view returns (uint256 profileId) {
         profileId = addressToProfileId[addr];
         if (profileId == 0) revert NotRegistered();
+    }
+
+    function _resolve(uint256 jobId, bool passed) internal {
+        Job storage j = jobs[jobId];
+        JobState finalState = passed ? JobState.COMPLETE : JobState.FAILED;
+        _moveJobState(jobId, JobState.IN_REVIEW, finalState);
+
+        for (uint256 i = 0; i < j.verifierIds.length; i++) {
+            uint256 vid = j.verifierIds[i];
+            bool withMajority = passed
+                ? !_verifierVotedFail[jobId][vid]
+                : _verifierVotedFail[jobId][vid];
+            _updateVerifierRep(vid, withMajority);
+            address vAddr = profiles[vid].addr;
+            usdc.safeTransfer(vAddr, j.verifierFeeEach);
+            emit VerifierFeePaid(jobId, vid, vAddr, j.verifierFeeEach);
+        }
+
+        if (passed) {
+            address workerAddr = profiles[j.workerId].addr;
+            usdc.safeTransfer(workerAddr, j.workerAmount);
+            _updateWorkerRep(j.workerId, true);
+            emit JobCompleted(jobId, j.workerId, j.workerAmount);
+        } else {
+            address posterAddr = profiles[j.posterId].addr;
+            usdc.safeTransfer(posterAddr, j.workerAmount);
+            _updateWorkerRep(j.workerId, false);
+            emit JobFailed(jobId, j.posterId, j.workerAmount);
+        }
+
+        _updatePosterRep(j.posterId, true);
     }
 
     function _moveJobState(uint256 jobId, JobState from, JobState to) internal {
