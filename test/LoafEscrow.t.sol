@@ -261,4 +261,106 @@ contract LoafEscrowTest is Test {
         vm.stopPrank();
         assertEq(jobId, 1);
     }
+
+    // ── acceptBid ─────────────────────────────────────────────────────────────
+
+    function test_acceptBid_success() public {
+        uint256 jobId = _postDefaultJob();
+        uint256 workerId = escrow.getProfileId(worker);
+        vm.prank(poster);
+        escrow.acceptBid(jobId, workerId);
+        LoafEscrow.Job memory j = escrow.getJob(jobId);
+        assertEq(j.workerId, workerId);
+        assertEq(uint8(j.state), uint8(LoafEscrow.JobState.ACTIVE));
+    }
+
+    function test_acceptBid_movesStateArray() public {
+        uint256 jobId = _postDefaultJob();
+        uint256 workerId = escrow.getProfileId(worker);
+        vm.prank(poster);
+        escrow.acceptBid(jobId, workerId);
+        assertEq(escrow.getJobCountByState(LoafEscrow.JobState.OPEN), 0);
+        assertEq(escrow.getJobCountByState(LoafEscrow.JobState.ACTIVE), 1);
+    }
+
+    function test_acceptBid_revert_notPoster() public {
+        uint256 jobId = _postDefaultJob();
+        uint256 workerId = escrow.getProfileId(worker);
+        vm.prank(stranger);
+        vm.expectRevert(LoafEscrow.NotRegistered.selector);
+        escrow.acceptBid(jobId, workerId);
+    }
+
+    function test_acceptBid_revert_wrongState() public {
+        uint256 jobId = _activeJob();
+        uint256 workerId = escrow.getProfileId(worker);
+        vm.prank(poster);
+        vm.expectRevert(abi.encodeWithSelector(LoafEscrow.InvalidState.selector, LoafEscrow.JobState.ACTIVE));
+        escrow.acceptBid(jobId, workerId);
+    }
+
+    function test_acceptBid_revert_expired() public {
+        uint256 jobId = _postDefaultJob();
+        uint256 workerId = escrow.getProfileId(worker);
+        vm.warp(block.timestamp + JOB_EXPIRY_OFFSET + 1);
+        vm.prank(poster);
+        vm.expectRevert(LoafEscrow.JobExpired.selector);
+        escrow.acceptBid(jobId, workerId);
+    }
+
+    function test_acceptBid_revert_profileNotFound() public {
+        uint256 jobId = _postDefaultJob();
+        vm.prank(poster);
+        vm.expectRevert(LoafEscrow.ProfileNotFound.selector);
+        escrow.acceptBid(jobId, 999);
+    }
+
+    // ── submitWork ────────────────────────────────────────────────────────────
+
+    function test_submitWork_success() public {
+        uint256 jobId = _activeJob();
+        bytes32 hash = keccak256("output");
+        vm.prank(worker);
+        escrow.submitWork(jobId, hash);
+        LoafEscrow.Job memory j = escrow.getJob(jobId);
+        assertEq(j.outputHash, hash);
+        assertEq(uint8(j.state), uint8(LoafEscrow.JobState.IN_REVIEW));
+    }
+
+    function test_submitWork_movesStateArray() public {
+        uint256 jobId = _activeJob();
+        vm.prank(worker);
+        escrow.submitWork(jobId, keccak256("output"));
+        assertEq(escrow.getJobCountByState(LoafEscrow.JobState.ACTIVE), 0);
+        assertEq(escrow.getJobCountByState(LoafEscrow.JobState.IN_REVIEW), 1);
+    }
+
+    function test_submitWork_revert_notWorker() public {
+        uint256 jobId = _activeJob();
+        vm.prank(stranger);
+        vm.expectRevert(LoafEscrow.NotRegistered.selector);
+        escrow.submitWork(jobId, keccak256("output"));
+    }
+
+    function test_submitWork_revert_wrongState() public {
+        uint256 jobId = _inReviewJob();
+        vm.prank(worker);
+        vm.expectRevert(abi.encodeWithSelector(LoafEscrow.InvalidState.selector, LoafEscrow.JobState.IN_REVIEW));
+        escrow.submitWork(jobId, keccak256("output2"));
+    }
+
+    function test_submitWork_revert_expired() public {
+        uint256 jobId = _activeJob();
+        vm.warp(block.timestamp + JOB_EXPIRY_OFFSET + 1);
+        vm.prank(worker);
+        vm.expectRevert(LoafEscrow.JobExpired.selector);
+        escrow.submitWork(jobId, keccak256("output"));
+    }
+
+    function test_submitWork_revert_zeroHash() public {
+        uint256 jobId = _activeJob();
+        vm.prank(worker);
+        vm.expectRevert(LoafEscrow.ZeroHash.selector);
+        escrow.submitWork(jobId, bytes32(0));
+    }
 }
