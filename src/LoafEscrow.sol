@@ -189,6 +189,37 @@ contract LoafEscrow {
         emit JobPosted(jobId, posterId, workerAmount, verifierFeeEach, verifierCount);
     }
 
+    function acceptBid(uint256 jobId, uint256 workerProfileId) external {
+        uint256 posterId = _profileIdOf(msg.sender);
+        Job storage j = jobs[jobId];
+        if (j.posterId != posterId) revert NotPoster();
+        if (j.state != JobState.OPEN) revert InvalidState(j.state);
+        if (block.timestamp >= j.expiresAt) revert JobExpired();
+
+        ActorProfile storage worker = profiles[workerProfileId];
+        if (!worker.exists) revert ProfileNotFound();
+
+        j.workerId = workerProfileId;
+        _moveJobState(jobId, JobState.OPEN, JobState.ACTIVE);
+
+        emit BidAccepted(jobId, workerProfileId);
+    }
+
+    function submitWork(uint256 jobId, bytes32 outputHash) external {
+        uint256 callerId = _profileIdOf(msg.sender);
+        Job storage j = jobs[jobId];
+        if (j.workerId != callerId) revert NotWorker();
+        if (j.state != JobState.ACTIVE) revert InvalidState(j.state);
+        if (block.timestamp >= j.expiresAt) revert JobExpired();
+        if (outputHash == bytes32(0)) revert ZeroHash();
+
+        j.outputHash = outputHash;
+        _moveJobState(jobId, JobState.ACTIVE, JobState.IN_REVIEW);
+
+        profiles[callerId].workerJobs++;
+        emit WorkSubmitted(jobId, outputHash);
+    }
+
     function updateAxlKey(string calldata newKey) external {
         uint256 profileId = _profileIdOf(msg.sender);
         if (bytes(newKey).length == 0) revert ZeroHash();
@@ -201,6 +232,19 @@ contract LoafEscrow {
     function _profileIdOf(address addr) internal view returns (uint256 profileId) {
         profileId = addressToProfileId[addr];
         if (profileId == 0) revert NotRegistered();
+    }
+
+    function _moveJobState(uint256 jobId, JobState from, JobState to) internal {
+        uint256[] storage arr = jobsByState[from];
+        uint256 idx = jobStateIndex[jobId];
+        uint256 last = arr[arr.length - 1];
+        arr[idx] = last;
+        jobStateIndex[last] = idx;
+        arr.pop();
+
+        jobStateIndex[jobId] = jobsByState[to].length;
+        jobsByState[to].push(jobId);
+        jobs[jobId].state = to;
     }
 
     function _clampScore(int32 score) internal pure returns (uint16) {
