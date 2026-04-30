@@ -292,6 +292,21 @@ contract LoafEscrow {
         }
     }
 
+    function claimExpired(uint256 jobId) external {
+        uint256 posterId = _profileIdOf(msg.sender);
+        Job storage j = jobs[jobId];
+        if (j.posterId != posterId) revert NotPoster();
+        if (j.state != JobState.OPEN) revert InvalidState(j.state);
+        if (block.timestamp < j.expiresAt) revert InvalidState(j.state);
+
+        uint256 refund = j.workerAmount + (j.verifierFeeEach * j.verifierCount);
+        _moveJobState(jobId, JobState.OPEN, JobState.FAILED);
+        _updatePosterRep(posterId, false);
+
+        usdc.safeTransfer(msg.sender, refund);
+        emit JobFailed(jobId, posterId, refund);
+    }
+
     function updateAxlKey(string calldata newKey) external {
         uint256 profileId = _profileIdOf(msg.sender);
         if (bytes(newKey).length == 0) revert ZeroHash();
