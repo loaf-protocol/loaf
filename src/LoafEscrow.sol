@@ -162,4 +162,34 @@ contract LoafEscrow {
         profileId = addressToProfileId[addr];
         if (profileId == 0) revert NotRegistered();
     }
+
+    function _clampScore(int32 score) internal pure returns (uint16) {
+        if (score < 0) return 0;
+        if (score > int32(uint32(MAX_SCORE))) return MAX_SCORE;
+        return uint16(uint32(score));
+    }
+
+    function _updateWorkerRep(uint256 profileId, bool passed) internal {
+        ActorProfile storage p = profiles[profileId];
+        int32 current = int32(uint32(p.workerScore));
+        int32 delta = passed ? int32(WORKER_PASS_DELTA) : int32(WORKER_FAIL_DELTA);
+        p.workerScore = _clampScore(current + delta);
+        emit ReputationUpdated(profileId, "worker", p.workerScore);
+    }
+
+    function _updateVerifierRep(uint256 profileId, bool withMajority) internal {
+        ActorProfile storage p = profiles[profileId];
+        int32 current = int32(uint32(p.verifierScore));
+        int32 delta = withMajority ? int32(VERIFIER_MAJORITY_DELTA) : int32(VERIFIER_MINORITY_DELTA);
+        p.verifierScore = _clampScore(current + delta);
+        emit ReputationUpdated(profileId, "verifier", p.verifierScore);
+    }
+
+    function _updatePosterRep(uint256 profileId, bool resolved) internal {
+        ActorProfile storage p = profiles[profileId];
+        int32 current = int32(uint32(p.posterScore));
+        int32 delta = resolved ? int32(POSTER_RESOLVE_DELTA) : int32(POSTER_EXPIRE_DELTA);
+        p.posterScore = _clampScore(current + delta);
+        emit ReputationUpdated(profileId, "poster", p.posterScore);
+    }
 }
