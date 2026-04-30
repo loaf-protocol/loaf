@@ -1,1 +1,9 @@
 .plans
+out/
+cache/
+.env
+.env.local
+lib/
+lcov.info
+coverage/
+broadcast/*/run-latest.json
