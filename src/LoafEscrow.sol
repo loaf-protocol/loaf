@@ -83,6 +83,25 @@ contract LoafEscrow {
     // Vote tracking
     mapping(uint256 => mapping(uint256 => bool)) private hasVoted;
 
+    // ── Errors ────────────────────────────────────────────────────────────────
+
+    error NotRegistered();
+    error AlreadyRegistered();
+    error ProfileNotFound();
+    error NotPoster();
+    error NotWorker();
+    error NotAssignedVerifier();
+    error AlreadyVoted();
+    error AlreadyApplied();
+    error VerifierSlotsFull();
+    error InvalidState(JobState current);
+    error JobExpired();
+    error InvalidVerifierCount();
+    error InvalidQuorum();
+    error ZeroAmount();
+    error ZeroHash();
+    error BelowMinReputation();
+
     // ── Events ────────────────────────────────────────────────────────────────
 
     event ProfileRegistered(uint256 indexed profileId, address indexed addr);
