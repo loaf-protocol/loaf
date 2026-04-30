@@ -476,6 +476,25 @@ contract LoafEscrowTest is Test {
         escrow.acceptVerifier(jobId, v1Id);
     }
 
+    function test_acceptVerifier_revert_belowMinReputation() public {
+        // Post a job with high minVerifierScore
+        _registerAll();
+        vm.startPrank(poster);
+        usdc.approve(address(escrow), type(uint256).max);
+        uint256 jobId = escrow.postJob("hard", WORKER_AMOUNT, VERIFIER_FEE, 1, 1, 400, block.timestamp + 1 days);
+        vm.stopPrank();
+        uint256 workerId = escrow.getProfileId(worker);
+        vm.prank(poster); escrow.acceptBid(jobId, workerId);
+        vm.prank(worker); escrow.submitWork(jobId, keccak256("out"));
+
+        uint256 v1Id = escrow.getProfileId(verifier1);
+        vm.prank(verifier1);
+        vm.expectRevert(LoafEscrow.BelowMinReputation.selector);
+        escrow.applyToVerify(jobId);
+        // suppress unused variable
+        (v1Id);
+    }
+
     function test_acceptVerifier_revert_slotsFull() public {
         uint256 jobId = _inReviewJob();
         uint256 v1Id  = escrow.getProfileId(verifier1);
@@ -497,5 +516,158 @@ contract LoafEscrowTest is Test {
         vm.expectRevert(LoafEscrow.VerifierSlotsFull.selector);
         escrow.acceptVerifier(jobId, v4Id);
         vm.stopPrank();
+    }
+
+    // ── submitVerdict ─────────────────────────────────────────────────────────
+
+    function test_submitVerdict_quorumPass() public {
+        uint256 jobId    = _readyForVerdicts();
+        uint256 workerId = escrow.getProfileId(worker);
+        uint256 posterId = escrow.getProfileId(poster);
+
+        uint256 workerBefore = usdc.balanceOf(worker);
+        uint256 v1Before     = usdc.balanceOf(verifier1);
+        uint16  workerScoreBefore = escrow.getProfile(workerId).workerScore;
+        uint16  posterScoreBefore = escrow.getProfile(posterId).posterScore;
+
+        vm.prank(verifier1); escrow.submitVerdict(jobId, true);
+        vm.prank(verifier2); escrow.submitVerdict(jobId, true);
+
+        // Quorum of 2 reached — job should be COMPLETE
+        LoafEscrow.Job memory j = escrow.getJob(jobId);
+        assertEq(uint8(j.state), uint8(LoafEscrow.JobState.COMPLETE));
+
+        // Worker paid
+        assertEq(usdc.balanceOf(worker), workerBefore + WORKER_AMOUNT);
+        // Verifiers paid (both voted, v3 not yet but quorum triggered payout for all assigned)
+        assertEq(usdc.balanceOf(verifier1), v1Before + VERIFIER_FEE);
+
+        // Worker rep +20
+        assertEq(escrow.getProfile(workerId).workerScore, workerScoreBefore + 20);
+        // Poster rep +10
+        assertEq(escrow.getProfile(posterId).posterScore, posterScoreBefore + 10);
+    }
+
+    function test_submitVerdict_quorumFail() public {
+        uint256 jobId    = _readyForVerdicts();
+        uint256 posterId = escrow.getProfileId(poster);
+        uint256 workerId = escrow.getProfileId(worker);
+
+        uint256 posterBefore      = usdc.balanceOf(poster);
+        uint16  workerScoreBefore = escrow.getProfile(workerId).workerScore;
+
+        vm.prank(verifier1); escrow.submitVerdict(jobId, false);
+        vm.prank(verifier2); escrow.submitVerdict(jobId, false);
+
+        // 2 fail votes > (3 - 2) = 1 → FAILED
+        LoafEscrow.Job memory j = escrow.getJob(jobId);
+        assertEq(uint8(j.state), uint8(LoafEscrow.JobState.FAILED));
+
+        // Poster gets workerAmount back
+        assertEq(usdc.balanceOf(poster), posterBefore + WORKER_AMOUNT);
+        // Worker rep -30
+        assertEq(escrow.getProfile(workerId).workerScore, workerScoreBefore - 30);
+        // Poster rep +10
+        assertEq(escrow.getProfile(posterId).posterScore, escrow.INITIAL_SCORE() + 10);
+    }
+
+    function test_submitVerdict_singleVerifier_pass() public {
+        _registerAll();
+        vm.startPrank(poster);
+        usdc.approve(address(escrow), type(uint256).max);
+        uint256 jobId = escrow.postJob("x", WORKER_AMOUNT, VERIFIER_FEE, 1, 1, 0, block.timestamp + 1 days);
+        vm.stopPrank();
+
+        uint256 workerId = escrow.getProfileId(worker);
+        uint256 v1Id     = escrow.getProfileId(verifier1);
+
+        vm.prank(poster);    escrow.acceptBid(jobId, workerId);
+        vm.prank(worker);    escrow.submitWork(jobId, keccak256("out"));
+        vm.prank(verifier1); escrow.applyToVerify(jobId);
+        vm.prank(poster);    escrow.acceptVerifier(jobId, v1Id);
+
+        uint256 workerBefore = usdc.balanceOf(worker);
+        vm.prank(verifier1); escrow.submitVerdict(jobId, true);
+
+        assertEq(uint8(escrow.getJob(jobId).state), uint8(LoafEscrow.JobState.COMPLETE));
+        assertEq(usdc.balanceOf(worker), workerBefore + WORKER_AMOUNT);
+    }
+
+    function test_submitVerdict_verifierPaidRegardlessOfOutcome() public {
+        uint256 jobId = _readyForVerdicts();
+        uint256 v1Before = usdc.balanceOf(verifier1);
+        uint256 v2Before = usdc.balanceOf(verifier2);
+        uint256 v3Before = usdc.balanceOf(verifier3);
+
+        vm.prank(verifier1); escrow.submitVerdict(jobId, true);
+        vm.prank(verifier2); escrow.submitVerdict(jobId, true);
+        // Quorum passes at v2 — all 3 assigned verifiers paid on resolution
+        assertEq(usdc.balanceOf(verifier1), v1Before + VERIFIER_FEE);
+        assertEq(usdc.balanceOf(verifier2), v2Before + VERIFIER_FEE);
+        assertEq(usdc.balanceOf(verifier3), v3Before + VERIFIER_FEE);
+    }
+
+    function test_submitVerdict_reputationMajority() public {
+        uint256 jobId = _readyForVerdicts();
+        uint256 v1Id  = escrow.getProfileId(verifier1);
+        uint256 v2Id  = escrow.getProfileId(verifier2);
+        uint256 v3Id  = escrow.getProfileId(verifier3);
+
+        // v1 and v2 vote pass (majority), v3 votes fail (minority — but quorum triggers before v3 votes)
+        vm.prank(verifier1); escrow.submitVerdict(jobId, true);
+        vm.prank(verifier2); escrow.submitVerdict(jobId, true);
+
+        // v1, v2 voted pass = majority (pass outcome)
+        assertEq(escrow.getProfile(v1Id).verifierScore, escrow.INITIAL_SCORE() + 10);
+        assertEq(escrow.getProfile(v2Id).verifierScore, escrow.INITIAL_SCORE() + 10);
+        // v3 hasn't voted yet but was assigned and still gets majority (didn't vote against)
+        assertEq(escrow.getProfile(v3Id).verifierScore, escrow.INITIAL_SCORE() + 10);
+    }
+
+    function test_submitVerdict_reputationMinority() public {
+        uint256 jobId = _readyForVerdicts();
+        uint256 v1Id  = escrow.getProfileId(verifier1);
+        uint256 v2Id  = escrow.getProfileId(verifier2);
+
+        // v1 votes fail, v2+v3 vote pass (quorum at v3)
+        vm.prank(verifier1); escrow.submitVerdict(jobId, false);
+        vm.prank(verifier2); escrow.submitVerdict(jobId, true);
+        vm.prank(verifier3); escrow.submitVerdict(jobId, true);
+
+        // pass outcome: v1 voted fail → minority
+        assertEq(escrow.getProfile(v1Id).verifierScore, escrow.INITIAL_SCORE() - 20);
+        // v2 voted pass → majority
+        assertEq(escrow.getProfile(v2Id).verifierScore, escrow.INITIAL_SCORE() + 10);
+    }
+
+    function test_submitVerdict_stateArrayMoves() public {
+        uint256 jobId = _readyForVerdicts();
+        assertEq(escrow.getJobCountByState(LoafEscrow.JobState.IN_REVIEW), 1);
+        vm.prank(verifier1); escrow.submitVerdict(jobId, true);
+        vm.prank(verifier2); escrow.submitVerdict(jobId, true);
+        assertEq(escrow.getJobCountByState(LoafEscrow.JobState.IN_REVIEW), 0);
+        assertEq(escrow.getJobCountByState(LoafEscrow.JobState.COMPLETE), 1);
+    }
+
+    function test_submitVerdict_revert_notVerifier() public {
+        uint256 jobId = _readyForVerdicts();
+        vm.prank(stranger);
+        vm.expectRevert(LoafEscrow.NotRegistered.selector);
+        escrow.submitVerdict(jobId, true);
+    }
+
+    function test_submitVerdict_revert_alreadyVoted() public {
+        uint256 jobId = _readyForVerdicts();
+        vm.prank(verifier1); escrow.submitVerdict(jobId, true);
+        vm.prank(verifier1);
+        vm.expectRevert(LoafEscrow.AlreadyVoted.selector);
+        escrow.submitVerdict(jobId, true);
+    }
+
+    function test_submitVerdict_revert_wrongState() public {
+        uint256 jobId = _activeJob();
+        vm.prank(verifier1);
+        vm.expectRevert(abi.encodeWithSelector(LoafEscrow.InvalidState.selector, LoafEscrow.JobState.ACTIVE));
+        escrow.submitVerdict(jobId, true);
     }
 }
