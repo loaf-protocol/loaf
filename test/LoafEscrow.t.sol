@@ -829,4 +829,38 @@ contract LoafEscrowTest is Test {
         // suppress unused fuzz params
         (passCount, failCount);
     }
+
+    // ── State array integrity ─────────────────────────────────────────────────
+
+    function test_stateArray_swapAndPop_integrity() public {
+        // Post 3 jobs, accept bid on job2 → it leaves OPEN array
+        // Verify remaining OPEN array is consistent and job3 index is correct
+        _registerAll();
+        vm.startPrank(poster);
+        usdc.approve(address(escrow), type(uint256).max);
+        escrow.postJob("job1", WORKER_AMOUNT, VERIFIER_FEE, VERIFIER_COUNT, QUORUM_THRESHOLD, 0, block.timestamp + 1 days);
+        escrow.postJob("job2", WORKER_AMOUNT, VERIFIER_FEE, VERIFIER_COUNT, QUORUM_THRESHOLD, 0, block.timestamp + 1 days);
+        escrow.postJob("job3", WORKER_AMOUNT, VERIFIER_FEE, VERIFIER_COUNT, QUORUM_THRESHOLD, 0, block.timestamp + 1 days);
+        vm.stopPrank();
+
+        assertEq(escrow.getJobCountByState(LoafEscrow.JobState.OPEN), 3);
+
+        // Remove middle job (job2 = id 2) via acceptBid
+        uint256 workerId = escrow.getProfileId(worker);
+        vm.prank(poster); escrow.acceptBid(2, workerId);
+
+        assertEq(escrow.getJobCountByState(LoafEscrow.JobState.OPEN), 2);
+        assertEq(escrow.getJobCountByState(LoafEscrow.JobState.ACTIVE), 1);
+
+        // Remaining OPEN jobs should be job1 and job3 (in any order)
+        uint256[] memory open = escrow.getJobIdsByState(LoafEscrow.JobState.OPEN);
+        bool hasJob1 = (open[0] == 1 || open[1] == 1);
+        bool hasJob3 = (open[0] == 3 || open[1] == 3);
+        assertTrue(hasJob1);
+        assertTrue(hasJob3);
+
+        // Accepting job3 should also work (its index was updated by swap-and-pop)
+        vm.prank(poster); escrow.acceptBid(3, workerId);
+        assertEq(escrow.getJobCountByState(LoafEscrow.JobState.OPEN), 1);
+    }
 }
