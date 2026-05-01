@@ -49,22 +49,9 @@
         "name": "workerProfileId",
         "type": "uint256",
         "internalType": "uint256"
-      }
-    ],
-    "outputs": [],
-    "stateMutability": "nonpayable"
-  },
-  {
-    "type": "function",
-    "name": "acceptVerifier",
-    "inputs": [
-      {
-        "name": "jobId",
-        "type": "uint256",
-        "internalType": "uint256"
       },
       {
-        "name": "verifierProfileId",
+        "name": "agreedWorkerAmount",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -87,10 +74,15 @@
   },
   {
     "type": "function",
-    "name": "applyToVerify",
+    "name": "assignVerifier",
     "inputs": [
       {
         "name": "jobId",
+        "type": "uint256",
+        "internalType": "uint256"
+      },
+      {
+        "name": "verifierProfileId",
         "type": "uint256",
         "internalType": "uint256"
       }
@@ -229,25 +221,6 @@
         "name": "state",
         "type": "uint8",
         "internalType": "enum LoafEscrow.JobState"
-      }
-    ],
-    "outputs": [
-      {
-        "name": "",
-        "type": "uint256[]",
-        "internalType": "uint256[]"
-      }
-    ],
-    "stateMutability": "view"
-  },
-  {
-    "type": "function",
-    "name": "getPendingVerifiers",
-    "inputs": [
-      {
-        "name": "jobId",
-        "type": "uint256",
-        "internalType": "uint256"
       }
     ],
     "outputs": [
@@ -778,26 +751,7 @@
   },
   {
     "type": "event",
-    "name": "VerifierAccepted",
-    "inputs": [
-      {
-        "name": "jobId",
-        "type": "uint256",
-        "indexed": true,
-        "internalType": "uint256"
-      },
-      {
-        "name": "verifierProfileId",
-        "type": "uint256",
-        "indexed": true,
-        "internalType": "uint256"
-      }
-    ],
-    "anonymous": false
-  },
-  {
-    "type": "event",
-    "name": "VerifierApplied",
+    "name": "VerifierAssigned",
     "inputs": [
       {
         "name": "jobId",
@@ -866,7 +820,7 @@
   },
   {
     "type": "error",
-    "name": "AlreadyApplied",
+    "name": "AlreadyAssigned",
     "inputs": []
   },
   {
@@ -877,6 +831,11 @@
   {
     "type": "error",
     "name": "AlreadyVoted",
+    "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "BelowBasePrice",
     "inputs": []
   },
   {

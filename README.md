@@ -46,13 +46,12 @@ postJob() ──► OPEN
 |---|---|---|
 | `registerProfile` | anyone | — |
 | `updateAxlKey` | profile owner | — |
-| `postJob` | registered | → OPEN, locks USDC |
-| `acceptBid` | poster | OPEN → ACTIVE |
+| `postJob` | registered | → OPEN, records base price (no USDC locked yet) |
+| `acceptBid` | poster | OPEN → ACTIVE, locks agreed USDC (≥ base price) |
 | `submitWork` | worker | ACTIVE → IN_REVIEW |
-| `applyToVerify` | registered + rep gate | — |
-| `acceptVerifier` | poster | pending → assigned |
+| `assignVerifier` | poster | directly assigns a verifier |
 | `submitVerdict` | assigned verifier | auto-resolves on quorum |
-| `claimExpired` | poster | OPEN → FAILED, full refund |
+| `claimExpired` | poster | OPEN → FAILED (no USDC refund; none was locked) |
 
 ---
 
@@ -62,7 +61,7 @@ postJob() ──► OPEN
 |---|---|
 | Network | Sepolia |
 | USDC | `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238` |
-| Address | TBD — see [docs/deployments.md](docs/deployments.md) after deploy |
+| Address | `0x8De32D82714153E5a0f07Cc10924A677C6dD4b5A` — see [docs/deployments.md](docs/deployments.md) |
 
 ---
 

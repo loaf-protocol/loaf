@@ -69,7 +69,7 @@ contract LoafEscrowTest is Test {
         jobId = _postDefaultJob();
         uint256 workerId = escrow.getProfileId(worker);
         vm.prank(poster);
-        escrow.acceptBid(jobId, workerId);
+        escrow.acceptBid(jobId, workerId, WORKER_AMOUNT);
     }
 
     function _inReviewJob() internal returns (uint256 jobId) {
@@ -78,25 +78,21 @@ contract LoafEscrowTest is Test {
         escrow.submitWork(jobId, keccak256("output"));
     }
 
-    function _acceptAllVerifiers(uint256 jobId) internal {
+    function _assignAllVerifiers(uint256 jobId) internal {
         uint256 v1Id = escrow.getProfileId(verifier1);
         uint256 v2Id = escrow.getProfileId(verifier2);
         uint256 v3Id = escrow.getProfileId(verifier3);
 
-        vm.prank(verifier1); escrow.applyToVerify(jobId);
-        vm.prank(verifier2); escrow.applyToVerify(jobId);
-        vm.prank(verifier3); escrow.applyToVerify(jobId);
-
         vm.startPrank(poster);
-        escrow.acceptVerifier(jobId, v1Id);
-        escrow.acceptVerifier(jobId, v2Id);
-        escrow.acceptVerifier(jobId, v3Id);
+        escrow.assignVerifier(jobId, v1Id);
+        escrow.assignVerifier(jobId, v2Id);
+        escrow.assignVerifier(jobId, v3Id);
         vm.stopPrank();
     }
 
     function _readyForVerdicts() internal returns (uint256 jobId) {
         jobId = _inReviewJob();
-        _acceptAllVerifiers(jobId);
+        _assignAllVerifiers(jobId);
     }
 
     // ── Profile: registerProfile ──────────────────────────────────────────────
@@ -180,12 +176,12 @@ contract LoafEscrowTest is Test {
         assertEq(escrow.getJobIdsByState(LoafEscrow.JobState.OPEN)[0], 1);
     }
 
-    function test_postJob_locksUSDC() public {
-        uint256 before = usdc.balanceOf(poster);
+    function test_postJob_doesNotLockUSDC() public {
+        uint256 posterBefore   = usdc.balanceOf(poster);
+        uint256 contractBefore = usdc.balanceOf(address(escrow));
         _postDefaultJob();
-        uint256 locked = WORKER_AMOUNT + (VERIFIER_FEE * VERIFIER_COUNT);
-        assertEq(usdc.balanceOf(poster), before - locked);
-        assertEq(usdc.balanceOf(address(escrow)), locked);
+        assertEq(usdc.balanceOf(poster),          posterBefore);
+        assertEq(usdc.balanceOf(address(escrow)), contractBefore);
     }
 
     function test_postJob_incrementingIds() public {
@@ -268,17 +264,42 @@ contract LoafEscrowTest is Test {
         uint256 jobId = _postDefaultJob();
         uint256 workerId = escrow.getProfileId(worker);
         vm.prank(poster);
-        escrow.acceptBid(jobId, workerId);
+        escrow.acceptBid(jobId, workerId, WORKER_AMOUNT);
         LoafEscrow.Job memory j = escrow.getJob(jobId);
         assertEq(j.workerId, workerId);
         assertEq(uint8(j.state), uint8(LoafEscrow.JobState.ACTIVE));
+    }
+
+    function test_acceptBid_locksUSDC() public {
+        uint256 jobId = _postDefaultJob();
+        uint256 workerId = escrow.getProfileId(worker);
+        uint256 posterBefore = usdc.balanceOf(poster);
+        vm.prank(poster);
+        escrow.acceptBid(jobId, workerId, WORKER_AMOUNT);
+        uint256 locked = WORKER_AMOUNT + (VERIFIER_FEE * VERIFIER_COUNT);
+        assertEq(usdc.balanceOf(poster),          posterBefore - locked);
+        assertEq(usdc.balanceOf(address(escrow)), locked);
+    }
+
+    function test_acceptBid_agreedAmountAboveBase() public {
+        uint256 jobId    = _postDefaultJob();
+        uint256 workerId = escrow.getProfileId(worker);
+        uint256 agreed   = WORKER_AMOUNT + 50e6;
+        uint256 posterBefore = usdc.balanceOf(poster);
+        vm.prank(poster);
+        escrow.acceptBid(jobId, workerId, agreed);
+        LoafEscrow.Job memory j = escrow.getJob(jobId);
+        assertEq(j.workerAmount, agreed);
+        uint256 locked = agreed + (VERIFIER_FEE * VERIFIER_COUNT);
+        assertEq(usdc.balanceOf(poster),          posterBefore - locked);
+        assertEq(usdc.balanceOf(address(escrow)), locked);
     }
 
     function test_acceptBid_movesStateArray() public {
         uint256 jobId = _postDefaultJob();
         uint256 workerId = escrow.getProfileId(worker);
         vm.prank(poster);
-        escrow.acceptBid(jobId, workerId);
+        escrow.acceptBid(jobId, workerId, WORKER_AMOUNT);
         assertEq(escrow.getJobCountByState(LoafEscrow.JobState.OPEN), 0);
         assertEq(escrow.getJobCountByState(LoafEscrow.JobState.ACTIVE), 1);
     }
@@ -288,7 +309,7 @@ contract LoafEscrowTest is Test {
         uint256 workerId = escrow.getProfileId(worker);
         vm.prank(stranger);
         vm.expectRevert(LoafEscrow.NotRegistered.selector);
-        escrow.acceptBid(jobId, workerId);
+        escrow.acceptBid(jobId, workerId, WORKER_AMOUNT);
     }
 
     function test_acceptBid_revert_wrongState() public {
@@ -296,7 +317,7 @@ contract LoafEscrowTest is Test {
         uint256 workerId = escrow.getProfileId(worker);
         vm.prank(poster);
         vm.expectRevert(abi.encodeWithSelector(LoafEscrow.InvalidState.selector, LoafEscrow.JobState.ACTIVE));
-        escrow.acceptBid(jobId, workerId);
+        escrow.acceptBid(jobId, workerId, WORKER_AMOUNT);
     }
 
     function test_acceptBid_revert_expired() public {
@@ -305,14 +326,22 @@ contract LoafEscrowTest is Test {
         vm.warp(block.timestamp + JOB_EXPIRY_OFFSET + 1);
         vm.prank(poster);
         vm.expectRevert(LoafEscrow.JobExpired.selector);
-        escrow.acceptBid(jobId, workerId);
+        escrow.acceptBid(jobId, workerId, WORKER_AMOUNT);
     }
 
     function test_acceptBid_revert_profileNotFound() public {
         uint256 jobId = _postDefaultJob();
         vm.prank(poster);
         vm.expectRevert(LoafEscrow.ProfileNotFound.selector);
-        escrow.acceptBid(jobId, 999);
+        escrow.acceptBid(jobId, 999, WORKER_AMOUNT);
+    }
+
+    function test_acceptBid_revert_belowBasePrice() public {
+        uint256 jobId    = _postDefaultJob();
+        uint256 workerId = escrow.getProfileId(worker);
+        vm.prank(poster);
+        vm.expectRevert(LoafEscrow.BelowBasePrice.selector);
+        escrow.acceptBid(jobId, workerId, WORKER_AMOUNT - 1);
     }
 
     // ── submitWork ────────────────────────────────────────────────────────────
@@ -364,138 +393,67 @@ contract LoafEscrowTest is Test {
         escrow.submitWork(jobId, bytes32(0));
     }
 
-    // ── applyToVerify ─────────────────────────────────────────────────────────
+    // ── assignVerifier ────────────────────────────────────────────────────────
 
-    function test_applyToVerify_success() public {
-        uint256 jobId = _inReviewJob();
-        uint256 v1Id  = escrow.getProfileId(verifier1);
-        vm.prank(verifier1);
-        escrow.applyToVerify(jobId);
-        uint256[] memory pending = escrow.getPendingVerifiers(jobId);
-        assertEq(pending.length, 1);
-        assertEq(pending[0], v1Id);
-    }
-
-    function test_applyToVerify_revert_notRegistered() public {
-        uint256 jobId = _inReviewJob();
-        vm.prank(stranger);
-        vm.expectRevert(LoafEscrow.NotRegistered.selector);
-        escrow.applyToVerify(jobId);
-    }
-
-    function test_applyToVerify_revert_wrongState() public {
-        uint256 jobId = _activeJob();
-        vm.prank(verifier1);
-        vm.expectRevert(abi.encodeWithSelector(LoafEscrow.InvalidState.selector, LoafEscrow.JobState.ACTIVE));
-        escrow.applyToVerify(jobId);
-    }
-
-    function test_applyToVerify_revert_expired() public {
-        uint256 jobId = _inReviewJob();
-        vm.warp(block.timestamp + JOB_EXPIRY_OFFSET + 1);
-        vm.prank(verifier1);
-        vm.expectRevert(LoafEscrow.JobExpired.selector);
-        escrow.applyToVerify(jobId);
-    }
-
-    function test_applyToVerify_revert_belowMinReputation() public {
-        uint256 jobId = _inReviewJob();
-        // Post a job requiring high reputation
-        _register(stranger, "axl-stranger");
-        vm.startPrank(poster);
-        uint256 highRepJobId = escrow.postJob("hard job", WORKER_AMOUNT, VERIFIER_FEE, 1, 1, 400, block.timestamp + 1 days);
-        vm.stopPrank();
-        uint256 strangerId = escrow.getProfileId(stranger);
-        // Accept bid and submit work to get to IN_REVIEW
-        vm.prank(poster); escrow.acceptBid(highRepJobId, strangerId);
-        vm.prank(stranger); escrow.submitWork(highRepJobId, keccak256("out"));
-        // verifier1 has score 250 < 400
-        vm.prank(verifier1);
-        vm.expectRevert(LoafEscrow.BelowMinReputation.selector);
-        escrow.applyToVerify(highRepJobId);
-        // suppress unused variable warning
-        (jobId);
-    }
-
-    function test_applyToVerify_revert_alreadyApplied() public {
-        uint256 jobId = _inReviewJob();
-        vm.prank(verifier1);
-        escrow.applyToVerify(jobId);
-        vm.prank(verifier1);
-        vm.expectRevert(LoafEscrow.AlreadyApplied.selector);
-        escrow.applyToVerify(jobId);
-    }
-
-    function test_applyToVerify_revert_slotsFull() public {
-        uint256 jobId = _inReviewJob();
-        // job has 3 slots; fill all then try a 4th
-        address v4 = makeAddr("verifier4");
-        usdc.mint(v4, 100e6);
-        _register(v4, "axl-v4");
-        _acceptAllVerifiers(jobId);
-        vm.prank(v4);
-        vm.expectRevert(LoafEscrow.VerifierSlotsFull.selector);
-        escrow.applyToVerify(jobId);
-    }
-
-    // ── acceptVerifier ────────────────────────────────────────────────────────
-
-    function test_acceptVerifier_success() public {
-        uint256 jobId = _inReviewJob();
-        uint256 v1Id  = escrow.getProfileId(verifier1);
-        vm.prank(verifier1); escrow.applyToVerify(jobId);
-        vm.prank(poster);    escrow.acceptVerifier(jobId, v1Id);
-        uint256[] memory assigned = escrow.getVerifierIds(jobId);
-        assertEq(assigned.length, 1);
-        assertEq(assigned[0], v1Id);
-        assertEq(escrow.getPendingVerifiers(jobId).length, 0);
-    }
-
-    function test_acceptVerifier_revert_notPoster() public {
-        uint256 jobId = _inReviewJob();
-        uint256 v1Id  = escrow.getProfileId(verifier1);
-        vm.prank(verifier1); escrow.applyToVerify(jobId);
-        vm.prank(worker);
-        vm.expectRevert(LoafEscrow.NotPoster.selector);
-        escrow.acceptVerifier(jobId, v1Id);
-    }
-
-    function test_acceptVerifier_revert_notPending() public {
+    function test_assignVerifier_success() public {
         uint256 jobId = _inReviewJob();
         uint256 v1Id  = escrow.getProfileId(verifier1);
         vm.prank(poster);
-        vm.expectRevert(LoafEscrow.ProfileNotFound.selector);
-        escrow.acceptVerifier(jobId, v1Id);
+        escrow.assignVerifier(jobId, v1Id);
+        uint256[] memory assigned = escrow.getVerifierIds(jobId);
+        assertEq(assigned.length, 1);
+        assertEq(assigned[0], v1Id);
     }
 
-    function test_acceptVerifier_revert_wrongState() public {
+    function test_assignVerifier_revert_notPoster() public {
+        uint256 jobId = _inReviewJob();
+        uint256 v1Id  = escrow.getProfileId(verifier1);
+        vm.prank(worker);
+        vm.expectRevert(LoafEscrow.NotPoster.selector);
+        escrow.assignVerifier(jobId, v1Id);
+    }
+
+    function test_assignVerifier_revert_profileNotFound() public {
+        uint256 jobId = _inReviewJob();
+        vm.prank(poster);
+        vm.expectRevert(LoafEscrow.ProfileNotFound.selector);
+        escrow.assignVerifier(jobId, 999);
+    }
+
+    function test_assignVerifier_revert_wrongState() public {
         uint256 jobId = _postDefaultJob();
         uint256 v1Id  = escrow.getProfileId(verifier1);
         vm.prank(poster);
         vm.expectRevert(abi.encodeWithSelector(LoafEscrow.InvalidState.selector, LoafEscrow.JobState.OPEN));
-        escrow.acceptVerifier(jobId, v1Id);
+        escrow.assignVerifier(jobId, v1Id);
     }
 
-    function test_acceptVerifier_revert_belowMinReputation() public {
-        // Post a job with high minVerifierScore
+    function test_assignVerifier_revert_belowMinReputation() public {
         _registerAll();
         vm.startPrank(poster);
         usdc.approve(address(escrow), type(uint256).max);
-        uint256 jobId = escrow.postJob("hard", WORKER_AMOUNT, VERIFIER_FEE, 1, 1, 400, block.timestamp + 1 days);
+        uint256 jobId = escrow.postJob("hard job", WORKER_AMOUNT, VERIFIER_FEE, 1, 1, 400, block.timestamp + 1 days);
         vm.stopPrank();
         uint256 workerId = escrow.getProfileId(worker);
-        vm.prank(poster); escrow.acceptBid(jobId, workerId);
+        vm.prank(poster); escrow.acceptBid(jobId, workerId, WORKER_AMOUNT);
         vm.prank(worker); escrow.submitWork(jobId, keccak256("out"));
 
         uint256 v1Id = escrow.getProfileId(verifier1);
-        vm.prank(verifier1);
+        vm.prank(poster);
         vm.expectRevert(LoafEscrow.BelowMinReputation.selector);
-        escrow.applyToVerify(jobId);
-        // suppress unused variable
-        (v1Id);
+        escrow.assignVerifier(jobId, v1Id);
     }
 
-    function test_acceptVerifier_revert_slotsFull() public {
+    function test_assignVerifier_revert_alreadyAssigned() public {
+        uint256 jobId = _inReviewJob();
+        uint256 v1Id  = escrow.getProfileId(verifier1);
+        vm.prank(poster); escrow.assignVerifier(jobId, v1Id);
+        vm.prank(poster);
+        vm.expectRevert(LoafEscrow.AlreadyAssigned.selector);
+        escrow.assignVerifier(jobId, v1Id);
+    }
+
+    function test_assignVerifier_revert_slotsFull() public {
         uint256 jobId = _inReviewJob();
         uint256 v1Id  = escrow.getProfileId(verifier1);
         uint256 v2Id  = escrow.getProfileId(verifier2);
@@ -504,18 +462,25 @@ contract LoafEscrowTest is Test {
         _register(v4, "axl-v4");
         uint256 v4Id  = escrow.getProfileId(v4);
 
-        vm.prank(verifier1); escrow.applyToVerify(jobId);
-        vm.prank(verifier2); escrow.applyToVerify(jobId);
-        vm.prank(verifier3); escrow.applyToVerify(jobId);
-        vm.prank(v4);        escrow.applyToVerify(jobId);
-
         vm.startPrank(poster);
-        escrow.acceptVerifier(jobId, v1Id);
-        escrow.acceptVerifier(jobId, v2Id);
-        escrow.acceptVerifier(jobId, v3Id);
+        escrow.assignVerifier(jobId, v1Id);
+        escrow.assignVerifier(jobId, v2Id);
+        escrow.assignVerifier(jobId, v3Id);
         vm.expectRevert(LoafEscrow.VerifierSlotsFull.selector);
-        escrow.acceptVerifier(jobId, v4Id);
+        escrow.assignVerifier(jobId, v4Id);
         vm.stopPrank();
+    }
+
+    function test_getVerifierIds_afterAssignment() public {
+        uint256 jobId = _inReviewJob();
+        uint256 v1Id  = escrow.getProfileId(verifier1);
+
+        assertEq(escrow.getVerifierIds(jobId).length, 0);
+
+        vm.prank(poster); escrow.assignVerifier(jobId, v1Id);
+
+        assertEq(escrow.getVerifierIds(jobId).length, 1);
+        assertEq(escrow.getVerifierIds(jobId)[0], v1Id);
     }
 
     // ── submitVerdict ─────────────────────────────────────────────────────────
@@ -581,10 +546,9 @@ contract LoafEscrowTest is Test {
         uint256 workerId = escrow.getProfileId(worker);
         uint256 v1Id     = escrow.getProfileId(verifier1);
 
-        vm.prank(poster);    escrow.acceptBid(jobId, workerId);
+        vm.prank(poster);    escrow.acceptBid(jobId, workerId, WORKER_AMOUNT);
         vm.prank(worker);    escrow.submitWork(jobId, keccak256("out"));
-        vm.prank(verifier1); escrow.applyToVerify(jobId);
-        vm.prank(poster);    escrow.acceptVerifier(jobId, v1Id);
+        vm.prank(poster);    escrow.assignVerifier(jobId, v1Id);
 
         uint256 workerBefore = usdc.balanceOf(worker);
         vm.prank(verifier1); escrow.submitVerdict(jobId, true);
@@ -677,7 +641,6 @@ contract LoafEscrowTest is Test {
         uint256 jobId    = _postDefaultJob();
         uint256 posterId = escrow.getProfileId(poster);
 
-        uint256 locked  = WORKER_AMOUNT + (VERIFIER_FEE * VERIFIER_COUNT);
         uint256 posterBefore      = usdc.balanceOf(poster);
         uint16  posterScoreBefore = escrow.getProfile(posterId).posterScore;
 
@@ -685,7 +648,8 @@ contract LoafEscrowTest is Test {
         vm.prank(poster);
         escrow.claimExpired(jobId);
 
-        assertEq(usdc.balanceOf(poster), posterBefore + locked);
+        // No USDC was locked at postJob — balance unchanged
+        assertEq(usdc.balanceOf(poster), posterBefore);
         assertEq(uint8(escrow.getJob(jobId).state), uint8(LoafEscrow.JobState.FAILED));
         assertEq(escrow.getProfile(posterId).posterScore, uint16(int16(posterScoreBefore) - 15));
     }
@@ -732,20 +696,6 @@ contract LoafEscrowTest is Test {
         assertEq(j.verifierCount,   VERIFIER_COUNT);
         assertEq(j.quorumThreshold, QUORUM_THRESHOLD);
         assertEq(uint8(j.state),    uint8(LoafEscrow.JobState.OPEN));
-    }
-
-    function test_getVerifierIds_vs_getPendingVerifiers() public {
-        uint256 jobId = _inReviewJob();
-        uint256 v1Id  = escrow.getProfileId(verifier1);
-        vm.prank(verifier1); escrow.applyToVerify(jobId);
-
-        assertEq(escrow.getPendingVerifiers(jobId).length, 1);
-        assertEq(escrow.getVerifierIds(jobId).length, 0);
-
-        vm.prank(poster); escrow.acceptVerifier(jobId, v1Id);
-
-        assertEq(escrow.getPendingVerifiers(jobId).length, 0);
-        assertEq(escrow.getVerifierIds(jobId).length, 1);
     }
 
     function test_getProfile_revert_notFound() public {
@@ -847,7 +797,7 @@ contract LoafEscrowTest is Test {
 
         // Remove middle job (job2 = id 2) via acceptBid
         uint256 workerId = escrow.getProfileId(worker);
-        vm.prank(poster); escrow.acceptBid(2, workerId);
+        vm.prank(poster); escrow.acceptBid(2, workerId, WORKER_AMOUNT);
 
         assertEq(escrow.getJobCountByState(LoafEscrow.JobState.OPEN), 2);
         assertEq(escrow.getJobCountByState(LoafEscrow.JobState.ACTIVE), 1);
@@ -860,7 +810,7 @@ contract LoafEscrowTest is Test {
         assertTrue(hasJob3);
 
         // Accepting job3 should also work (its index was updated by swap-and-pop)
-        vm.prank(poster); escrow.acceptBid(3, workerId);
+        vm.prank(poster); escrow.acceptBid(3, workerId, WORKER_AMOUNT);
         assertEq(escrow.getJobCountByState(LoafEscrow.JobState.OPEN), 1);
     }
 }

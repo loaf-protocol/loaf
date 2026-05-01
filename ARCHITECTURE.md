@@ -22,7 +22,7 @@
 ┌───────────────────────────────▼─────────────────────────────────┐
 │                        LoafEscrow.sol                           │
 │  registerProfile · postJob · acceptBid · submitWork             │
-│  applyToVerify · acceptVerifier · submitVerdict · claimExpired  │
+│  assignVerifier · submitVerdict · claimExpired                  │
 └──────┬──────────────────────────────────────────────────────────┘
        │ events                              │ USDC transfers
 ┌──────▼──────────┐               ┌──────────▼──────────┐
@@ -108,13 +108,12 @@ enum JobState { OPEN, ACTIVE, IN_REVIEW, COMPLETE, FAILED }
 |---|---|---|---|---|
 | `registerProfile` | anyone | — | — | One-time per address; all scores start at 250 |
 | `updateAxlKey` | profile owner | — | — | Updates AXL public key |
-| `postJob` | registered | — | → OPEN | Locks USDC: `workerAmount + (feeEach × count)` |
-| `acceptBid` | poster | OPEN | → ACTIVE | Assigns worker profile |
+| `postJob` | registered | — | → OPEN | Records base price; no USDC locked yet |
+| `acceptBid` | poster | OPEN | → ACTIVE | Locks USDC: `agreedWorkerAmount + (feeEach × count)`; agreed amount must be ≥ base price |
 | `submitWork` | worker | ACTIVE | → IN_REVIEW | Stores `outputHash` |
-| `applyToVerify` | registered + rep ≥ min | IN_REVIEW | — | Adds to pending list |
-| `acceptVerifier` | poster | IN_REVIEW | — | Moves pending → assigned |
+| `assignVerifier` | poster | IN_REVIEW | — | Directly assigns a verifier; no application step |
 | `submitVerdict` | assigned verifier | IN_REVIEW | → COMPLETE or FAILED | Auto-resolves on quorum |
-| `claimExpired` | poster | OPEN (expired) | → FAILED | Full refund |
+| `claimExpired` | poster | OPEN (expired) | → FAILED | No funds to refund (none were locked) |
 | `getJob` | view | any | — | Returns full Job struct |
 | `getProfile` | view | any | — | Returns ActorProfile by ID |
 | `getJobIdsByState` | view | any | — | O(n_state) list |
@@ -129,8 +128,7 @@ enum JobState { OPEN, ACTIVE, IN_REVIEW, COMPLETE, FAILED }
 | `postJob` | Must be registered |
 | `acceptBid` | `j.posterId == callerProfileId` |
 | `submitWork` | `j.workerId == callerProfileId` |
-| `applyToVerify` | Registered + `verifierScore ≥ minVerifierScore` |
-| `acceptVerifier` | `j.posterId == callerProfileId` |
+| `assignVerifier` | `j.posterId == callerProfileId` + `verifierScore ≥ minVerifierScore` |
 | `submitVerdict` | `isAssignedVerifier[jobId][callerProfileId]` |
 | `claimExpired` | `j.posterId == callerProfileId` + `block.timestamp ≥ expiresAt` + OPEN state |
 
@@ -161,8 +159,7 @@ All scores clamped to [0, 500]. Initial score: 250.
 | `JobPosted(jobId, posterId, workerAmount, feeEach, count)` | `postJob` |
 | `BidAccepted(jobId, workerId)` | `acceptBid` |
 | `WorkSubmitted(jobId, outputHash)` | `submitWork` |
-| `VerifierApplied(jobId, verifierProfileId)` | `applyToVerify` |
-| `VerifierAccepted(jobId, verifierProfileId)` | `acceptVerifier` |
+| `VerifierAssigned(jobId, verifierProfileId)` | `assignVerifier` |
 | `VerdictSubmitted(jobId, verifierProfileId, pass)` | `submitVerdict` |
 | `JobCompleted(jobId, workerId, amount)` | `_resolve` (pass) |
 | `JobFailed(jobId, posterId, refund)` | `_resolve` (fail) / `claimExpired` |
@@ -174,10 +171,10 @@ All scores clamped to [0, 500]. Initial score: 250.
 
 - **Token**: Circle official Sepolia USDC — `0x1c7D4B196Cb0C7B01d743Fbc6116a902379C7238` (injected via constructor)
 - **Decimals**: 6
-- **Lock point**: `postJob` — `safeTransferFrom(poster, contract, total)`
+- **Lock point**: `acceptBid` — `safeTransferFrom(poster, contract, agreedWorkerAmount + feeEach × count)`; `postJob` records only a base/minimum price with no transfer
 - **Release on COMPLETE**: worker receives `workerAmount`; all assigned verifiers receive `verifierFeeEach`
 - **Release on FAILED**: poster receives `workerAmount` back; all assigned verifiers still receive `verifierFeeEach`
-- **Release on claimExpired**: poster receives full `workerAmount + (feeEach × count)` back
+- **Release on claimExpired**: job was in OPEN state — no USDC was ever locked, no transfer occurs
 - All transfers use OpenZeppelin `SafeERC20`
 
 ---

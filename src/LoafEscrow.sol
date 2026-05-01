@@ -73,10 +73,6 @@ contract LoafEscrow {
     mapping(JobState => uint256[]) private jobsByState;
     mapping(uint256 => uint256) private jobStateIndex;
 
-    // Pending verifier applications per job
-    mapping(uint256 => uint256[]) private pendingVerifiers;
-    mapping(uint256 => mapping(uint256 => bool)) private isPendingVerifier;
-
     // Verifier assignment tracking
     mapping(uint256 => mapping(uint256 => bool)) private isAssignedVerifier;
 
@@ -94,7 +90,7 @@ contract LoafEscrow {
     error NotWorker();
     error NotAssignedVerifier();
     error AlreadyVoted();
-    error AlreadyApplied();
+    error AlreadyAssigned();
     error VerifierSlotsFull();
     error InvalidState(JobState current);
     error JobExpired();
@@ -103,6 +99,7 @@ contract LoafEscrow {
     error ZeroAmount();
     error ZeroHash();
     error BelowMinReputation();
+    error BelowBasePrice();
 
     // ── Events ────────────────────────────────────────────────────────────────
 
@@ -113,8 +110,7 @@ contract LoafEscrow {
     event JobPosted(uint256 indexed jobId, uint256 indexed posterId, uint256 workerAmount, uint256 verifierFeeEach, uint8 verifierCount);
     event BidAccepted(uint256 indexed jobId, uint256 indexed workerId);
     event WorkSubmitted(uint256 indexed jobId, bytes32 outputHash);
-    event VerifierApplied(uint256 indexed jobId, uint256 indexed verifierProfileId);
-    event VerifierAccepted(uint256 indexed jobId, uint256 indexed verifierProfileId);
+    event VerifierAssigned(uint256 indexed jobId, uint256 indexed verifierProfileId);
     event VerdictSubmitted(uint256 indexed jobId, uint256 indexed verifierProfileId, bool pass);
 
     event JobCompleted(uint256 indexed jobId, uint256 indexed workerId, uint256 amount);
@@ -168,9 +164,6 @@ contract LoafEscrow {
         if (quorumThreshold < 1 || quorumThreshold > verifierCount) revert InvalidQuorum();
         if (expiresAt <= block.timestamp) revert JobExpired();
 
-        uint256 totalLock = workerAmount + (verifierFeeEach * verifierCount);
-        usdc.safeTransferFrom(msg.sender, address(this), totalLock);
-
         jobId = ++jobCount;
         Job storage j = jobs[jobId];
         j.posterId = posterId;
@@ -191,7 +184,7 @@ contract LoafEscrow {
         emit JobPosted(jobId, posterId, workerAmount, verifierFeeEach, verifierCount);
     }
 
-    function acceptBid(uint256 jobId, uint256 workerProfileId) external {
+    function acceptBid(uint256 jobId, uint256 workerProfileId, uint256 agreedWorkerAmount) external {
         uint256 posterId = _profileIdOf(msg.sender);
         Job storage j = jobs[jobId];
         if (j.posterId != posterId) revert NotPoster();
@@ -200,7 +193,12 @@ contract LoafEscrow {
 
         ActorProfile storage worker = profiles[workerProfileId];
         if (!worker.exists) revert ProfileNotFound();
+        if (agreedWorkerAmount < j.workerAmount) revert BelowBasePrice();
 
+        uint256 totalLock = agreedWorkerAmount + (j.verifierFeeEach * j.verifierCount);
+        usdc.safeTransferFrom(msg.sender, address(this), totalLock);
+
+        j.workerAmount = agreedWorkerAmount;
         j.workerId = workerProfileId;
         _moveJobState(jobId, JobState.OPEN, JobState.ACTIVE);
 
@@ -222,49 +220,23 @@ contract LoafEscrow {
         emit WorkSubmitted(jobId, outputHash);
     }
 
-    function applyToVerify(uint256 jobId) external {
-        uint256 verifierId = _profileIdOf(msg.sender);
-        Job storage j = jobs[jobId];
-        if (j.state != JobState.IN_REVIEW) revert InvalidState(j.state);
-        if (block.timestamp >= j.expiresAt) revert JobExpired();
-        if (profiles[verifierId].verifierScore < j.minVerifierScore) revert BelowMinReputation();
-        if (isPendingVerifier[jobId][verifierId]) revert AlreadyApplied();
-        if (isAssignedVerifier[jobId][verifierId]) revert AlreadyApplied();
-        if (j.verifierIds.length >= j.verifierCount) revert VerifierSlotsFull();
-
-        pendingVerifiers[jobId].push(verifierId);
-        isPendingVerifier[jobId][verifierId] = true;
-
-        emit VerifierApplied(jobId, verifierId);
-    }
-
-    function acceptVerifier(uint256 jobId, uint256 verifierProfileId) external {
+    function assignVerifier(uint256 jobId, uint256 verifierProfileId) external {
         uint256 posterId = _profileIdOf(msg.sender);
         Job storage j = jobs[jobId];
         if (j.posterId != posterId) revert NotPoster();
         if (j.state != JobState.IN_REVIEW) revert InvalidState(j.state);
-        if (!isPendingVerifier[jobId][verifierProfileId]) revert ProfileNotFound();
+        if (!profiles[verifierProfileId].exists) revert ProfileNotFound();
+        if (isAssignedVerifier[jobId][verifierProfileId]) revert AlreadyAssigned();
         if (j.verifierIds.length >= j.verifierCount) revert VerifierSlotsFull();
 
         ActorProfile storage v = profiles[verifierProfileId];
         if (v.verifierScore < j.minVerifierScore) revert BelowMinReputation();
 
-        // Remove from pending list
-        uint256[] storage pending = pendingVerifiers[jobId];
-        for (uint256 i = 0; i < pending.length; i++) {
-            if (pending[i] == verifierProfileId) {
-                pending[i] = pending[pending.length - 1];
-                pending.pop();
-                break;
-            }
-        }
-        isPendingVerifier[jobId][verifierProfileId] = false;
-
         j.verifierIds.push(verifierProfileId);
         isAssignedVerifier[jobId][verifierProfileId] = true;
         v.verifierJobs++;
 
-        emit VerifierAccepted(jobId, verifierProfileId);
+        emit VerifierAssigned(jobId, verifierProfileId);
     }
 
     function submitVerdict(uint256 jobId, bool pass) external {
@@ -299,12 +271,10 @@ contract LoafEscrow {
         if (j.state != JobState.OPEN) revert InvalidState(j.state);
         if (block.timestamp < j.expiresAt) revert InvalidState(j.state);
 
-        uint256 refund = j.workerAmount + (j.verifierFeeEach * j.verifierCount);
         _moveJobState(jobId, JobState.OPEN, JobState.FAILED);
         _updatePosterRep(posterId, false);
 
-        usdc.safeTransfer(msg.sender, refund);
-        emit JobFailed(jobId, posterId, refund);
+        emit JobFailed(jobId, posterId, 0);
     }
 
     // ── View functions ────────────────────────────────────────────────────────
@@ -315,10 +285,6 @@ contract LoafEscrow {
 
     function getVerifierIds(uint256 jobId) external view returns (uint256[] memory) {
         return jobs[jobId].verifierIds;
-    }
-
-    function getPendingVerifiers(uint256 jobId) external view returns (uint256[] memory) {
-        return pendingVerifiers[jobId];
     }
 
     function getJobIdsByState(JobState state) external view returns (uint256[] memory) {
